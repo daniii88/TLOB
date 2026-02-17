@@ -14,6 +14,7 @@ scikit_learn
 scipy
 seaborn
 torch==2.5.0+cu121
+torchvision==0.20.0+cu121
 torch_ema
 transformers
 wandb

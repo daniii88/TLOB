@@ -1,4 +1,5 @@
 import torch
+import os
 from enum import Enum
 from preprocessing.dataset import Dataset  
 
@@ -62,7 +63,43 @@ LEN_LEVEL = 4
 LEN_ORDER = 6
 LEN_SMOOTH = 10
 
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+def _strtobool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_device() -> str:
+    force_cpu = _strtobool(os.getenv("TLOB_FORCE_CPU", "0"))
+    if force_cpu:
+        print("TLOB_FORCE_CPU=1 -> forcing CPU execution")
+        return "cpu"
+
+    if not torch.cuda.is_available():
+        return "cpu"
+
+    # Proactively verify that this CUDA build supports the current GPU arch.
+    try:
+        capability = torch.cuda.get_device_capability(0)
+        sm = f"sm_{capability[0]}{capability[1]}"
+        supported_archs = set(torch.cuda.get_arch_list())
+        if supported_archs and sm not in supported_archs:
+            print(
+                "CUDA available but GPU arch is unsupported by this torch build "
+                f"(gpu={sm}, torch_archs={sorted(supported_archs)}). Falling back to CPU."
+            )
+            return "cpu"
+        probe = torch.zeros(1, device="cuda")
+        _ = (probe + 1).item()
+    except RuntimeError as exc:
+        msg = str(exc).lower()
+        if "no kernel image is available" in msg or "no kernel image available" in msg:
+            print("CUDA kernel image unsupported for this GPU. Falling back to CPU.")
+            return "cpu"
+        raise
+
+    return "cuda"
+
+
+DEVICE = _resolve_device()
 DIR_EXPERIMENTS = "data/experiments"
 DIR_SAVED_MODEL = "data/checkpoints"
 DATA_DIR = "data"
