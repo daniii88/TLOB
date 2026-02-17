@@ -1,13 +1,45 @@
-wandb
-outputs
-.hydra
-__pycache__
-lightning_logs
-data/d*
-data/I*
-data/T*
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Experiment tracking / logs
+wandb/
+outputs/
+.hydra/
+lightning_logs/
+logs/
+
+# Local packaging artifacts
+artifacts/
+
+# Generated datasets and model artifacts
+data/checkpoints/
+data/BTC/
+data/ENGINE/
+data/ENGINE_USABLE/
 data/FI_2010/*.txt
-data/BTC
-env
-preprocessing/digital*
-data/checkpoints/TLOB/v*
+data/FI_2010/*.zip
+
+# Legacy preprocessing outputs
+preprocessing/digital*/

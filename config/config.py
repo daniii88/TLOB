@@ -40,12 +40,14 @@ class Dataset:
     type: DatasetType = MISSING
     dates: list = MISSING
     batch_size: int = MISSING
+    data_path: str = ""
 
 @dataclass
 class FI_2010(Dataset):
     type: DatasetType = DatasetType.FI_2010
     dates: list = field(default_factory=lambda: ["2010-01-01", "2010-12-31"])
     batch_size: int = 32
+    data_path: str = "data/FI_2010"
 
 @dataclass
 class LOBSTER(Dataset):
@@ -57,6 +59,7 @@ class LOBSTER(Dataset):
     training_stocks: list = field(default_factory=lambda: ["INTC"])
     testing_stocks: list = field(default_factory=lambda: ["INTC"])
     batch_size: int = 128
+    data_path: str = "data"
     
 @dataclass
 class BTC(Dataset):
@@ -68,6 +71,15 @@ class BTC(Dataset):
     batch_size: int = 128
     training_stocks: list = field(default_factory=lambda: ["BTC"])
     testing_stocks: list = field(default_factory=lambda: ["BTC"])
+    data_path: str = "data/BTC"
+
+
+@dataclass
+class ENGINE(Dataset):
+    type: DatasetType = DatasetType.ENGINE
+    dates: list = field(default_factory=lambda: ["n/a", "n/a"])
+    batch_size: int = 128
+    data_path: str = "data/ENGINE"
 
 @dataclass
 class Experiment:
@@ -105,3 +117,4 @@ cs.store(group="model", name="deeplob", node=DeepLOB)
 cs.store(group="dataset", name="lobster", node=LOBSTER)
 cs.store(group="dataset", name="fi_2010", node=FI_2010)
 cs.store(group="dataset", name="btc", node=BTC)
+cs.store(group="dataset", name="engine", node=ENGINE)

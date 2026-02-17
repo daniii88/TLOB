@@ -1,0 +1,26 @@
+{
+  "name": "engine_tlob_entry_v1",
+  "description": "Train TLOB on dydx-highrisk-engine shadow export dataset (ENGINE).",
+  "train": {
+    "model": "tlob",
+    "dataset": "engine",
+    "overrides": {
+      "experiment.is_data_preprocessed": true,
+      "experiment.is_wandb": false,
+      "experiment.is_sweep": false,
+      "experiment.max_epochs": 25,
+      "experiment.seed": 42,
+      "experiment.horizon": 10,
+      "dataset.batch_size": 128,
+      "model.hyperparameters_fixed.seq_size": 128,
+      "model.hyperparameters_fixed.lr": 0.0001,
+      "model.hyperparameters_fixed.num_layers": 4,
+      "model.hyperparameters_fixed.num_heads": 1,
+      "model.hyperparameters_fixed.all_features": true
+    }
+  },
+  "backtest": {
+    "script": "run_backtesting.py",
+    "args": []
+  }
+}

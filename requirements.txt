@@ -20,3 +20,4 @@ wandb
 kagglehub
 onnx
 onnxruntime-gpu
+backtesting

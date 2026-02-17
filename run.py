@@ -1,10 +1,7 @@
 import lightning as L
 import omegaconf
 import torch
-import glob
 import os
-from lightning.pytorch.loggers import WandbLogger
-import wandb
 from torch.utils.data import DataLoader
 from lightning.pytorch.callbacks import TQDMProgressBar
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
@@ -13,10 +10,20 @@ from models.engine import Engine
 from preprocessing.fi_2010 import fi_2010_load
 from preprocessing.lobster import lobster_load
 from preprocessing.btc import btc_load
+from preprocessing.engine import engine_load
 from preprocessing.dataset import Dataset, DataModule
 import constants as cst
 from constants import DatasetType, SamplingType
 torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
+
+
+def class_distribution(labels: torch.Tensor):
+    total = labels.shape[0]
+    if total == 0:
+        return {0: 0.0, 1: 0.0, 2: 0.0}
+    classes, counts = torch.unique(labels, return_counts=True)
+    counts_by_class = {int(cls.item()): int(cnt.item()) for cls, cnt in zip(classes, counts)}
+    return {cls: counts_by_class.get(cls, 0) / total for cls in (0, 1, 2)}
 
 
 def run(config: Config, accelerator):
@@ -55,7 +62,7 @@ def train(config: Config, trainer: L.Trainer, run=None):
     checkpoint_path = os.path.join(cst.DIR_SAVED_MODEL, model_type.value, checkpoint_ref)
     dataset_type = config.dataset.type.value
     if dataset_type == "FI_2010":
-        path = cst.DATA_DIR + "/FI_2010"
+        path = config.dataset.data_path
         train_input, train_labels, val_input, val_labels, test_input, test_labels = fi_2010_load(path, seq_size, horizon, config.model.hyperparameters_fixed["all_features"])
         train_set = Dataset(train_input, train_labels, seq_size)
         val_set = Dataset(val_input, val_labels, seq_size)
@@ -75,9 +82,9 @@ def train(config: Config, trainer: L.Trainer, run=None):
         test_loaders = [data_module.test_dataloader()]
     
     elif dataset_type == "BTC":
-        train_input, train_labels = btc_load(cst.DATA_DIR + "/BTC/train.npy", cst.LEN_SMOOTH, horizon, seq_size)
-        val_input, val_labels = btc_load(cst.DATA_DIR + "/BTC/val.npy", cst.LEN_SMOOTH, horizon, seq_size)  
-        test_input, test_labels = btc_load(cst.DATA_DIR + "/BTC/test.npy", cst.LEN_SMOOTH, horizon, seq_size)
+        train_input, train_labels = btc_load(os.path.join(config.dataset.data_path, "train.npy"), cst.LEN_SMOOTH, horizon, seq_size)
+        val_input, val_labels = btc_load(os.path.join(config.dataset.data_path, "val.npy"), cst.LEN_SMOOTH, horizon, seq_size)
+        test_input, test_labels = btc_load(os.path.join(config.dataset.data_path, "test.npy"), cst.LEN_SMOOTH, horizon, seq_size)
         train_set = Dataset(train_input, train_labels, seq_size)
         val_set = Dataset(val_input, val_labels, seq_size)
         test_set = Dataset(test_input, test_labels, seq_size)
@@ -95,36 +102,63 @@ def train(config: Config, trainer: L.Trainer, run=None):
         ) 
 
         test_loaders = [data_module.test_dataloader()]
+    elif dataset_type == "ENGINE":
+        train_input, train_labels = engine_load(
+            os.path.join(config.dataset.data_path, "train.npy"), cst.LEN_SMOOTH, horizon, seq_size
+        )
+        val_input, val_labels = engine_load(
+            os.path.join(config.dataset.data_path, "val.npy"), cst.LEN_SMOOTH, horizon, seq_size
+        )
+        test_input, test_labels = engine_load(
+            os.path.join(config.dataset.data_path, "test.npy"), cst.LEN_SMOOTH, horizon, seq_size
+        )
+        train_set = Dataset(train_input, train_labels, seq_size)
+        val_set = Dataset(val_input, val_labels, seq_size)
+        test_set = Dataset(test_input, test_labels, seq_size)
+        if config.experiment.is_debug:
+            train_set.length = 1000
+            val_set.length = 1000
+            test_set.length = 10000
+        data_module = DataModule(
+            train_set=train_set,
+            val_set=val_set,
+            test_set=test_set,
+            batch_size=config.dataset.batch_size,
+            test_batch_size=config.dataset.batch_size * 4,
+            num_workers=4,
+        )
+        test_loaders = [data_module.test_dataloader()]
         
     elif dataset_type == "LOBSTER":
+        lobster_data_root = config.dataset.data_path
         training_stocks = config.dataset.training_stocks
         testing_stocks = config.dataset.testing_stocks
         for i in range(len(training_stocks)):
             if i == 0:
                 for j in range(2):
                     if j == 0:
-                        path = cst.DATA_DIR + "/" + training_stocks[i] + "/train.npy"
+                        path = os.path.join(lobster_data_root, training_stocks[i], "train.npy")
                         train_input, train_labels = lobster_load(path, config.model.hyperparameters_fixed["all_features"], cst.LEN_SMOOTH, horizon, seq_size)
                     if j == 1:
-                        path = cst.DATA_DIR + "/" + training_stocks[i] + "/val.npy"
+                        path = os.path.join(lobster_data_root, training_stocks[i], "val.npy")
                         val_input, val_labels = lobster_load(path, config.model.hyperparameters_fixed["all_features"], cst.LEN_SMOOTH, horizon, seq_size)
             else:
                 for j in range(2):
                     if j == 0:
-                        path = cst.DATA_DIR + "/" + training_stocks[i] + "/train.npy"
+                        path = os.path.join(lobster_data_root, training_stocks[i], "train.npy")
                         train_labels = torch.cat((train_labels, torch.zeros(seq_size+horizon-1, dtype=torch.long)), 0)
                         train_input_tmp, train_labels_tmp = lobster_load(path, config.model.hyperparameters_fixed["all_features"], cst.LEN_SMOOTH, horizon, seq_size)
                         train_input = torch.cat((train_input, train_input_tmp), 0)
                         train_labels = torch.cat((train_labels, train_labels_tmp), 0)
                     if j == 1:
-                        path = cst.DATA_DIR + "/" + training_stocks[i] + "/val.npy"
+                        path = os.path.join(lobster_data_root, training_stocks[i], "val.npy")
                         val_labels = torch.cat((val_labels, torch.zeros(seq_size+horizon-1, dtype=torch.long)), 0)
                         val_input_tmp, val_labels_tmp = lobster_load(path, config.model.hyperparameters_fixed["all_features"], cst.LEN_SMOOTH, horizon, seq_size)
                         val_input = torch.cat((val_input, val_input_tmp), 0)
                         val_labels = torch.cat((val_labels, val_labels_tmp), 0)
         test_loaders = []
         for i in range(len(testing_stocks)):
-            path = cst.DATA_DIR + "/" + testing_stocks[i] + "/test.npy"
+            path = os.path.join(lobster_data_root, testing_stocks[i], "test.npy")
             test_input, test_labels = lobster_load(path, config.model.hyperparameters_fixed["all_features"], cst.LEN_SMOOTH, horizon, seq_size)
             test_set = Dataset(test_input, test_labels, seq_size)
             test_dataloader = DataLoader(
@@ -154,22 +188,31 @@ def train(config: Config, trainer: L.Trainer, run=None):
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
     
-    counts_train = torch.unique(train_labels, return_counts=True)
-    counts_val = torch.unique(val_labels, return_counts=True)
-    counts_test = torch.unique(test_labels, return_counts=True)
+    counts_train = class_distribution(train_labels)
+    counts_val = class_distribution(val_labels)
+    counts_test = class_distribution(test_labels)
     print()
     print("Train set shape: ", train_input.shape)
     print("Val set shape: ", val_input.shape)
     print("Test set shape: ", test_input.shape)
-    print(f"Classes distribution in train set: up {(counts_train[1][0].item()/train_labels.shape[0]):.2f} stat {(counts_train[1][1].item()/train_labels.shape[0]):.2f} down {(counts_train[1][2].item()/train_labels.shape[0]):.2f} ", )
-    print(f"Classes distribution in val set: up {(counts_val[1][0].item()/val_labels.shape[0]):.2f} stat {(counts_val[1][1].item()/val_labels.shape[0]):.2f} down {(counts_val[1][2].item()/val_labels.shape[0]):.2f} ", )
-    print(f"Classes distribution in test set: up {(counts_test[1][0].item()/test_labels.shape[0]):.2f} stat {(counts_test[1][1].item()/test_labels.shape[0]):.2f} down {(counts_test[1][2].item()/test_labels.shape[0]):.2f} ", )
+    print(f"Classes distribution in train set: up {counts_train[0]:.2f} stat {counts_train[1]:.2f} down {counts_train[2]:.2f}")
+    print(f"Classes distribution in val set: up {counts_val[0]:.2f} stat {counts_val[1]:.2f} down {counts_val[2]:.2f}")
+    print(f"Classes distribution in test set: up {counts_test[0]:.2f} stat {counts_test[1]:.2f} down {counts_test[2]:.2f}")
     print()
     
     experiment_type = config.experiment.type
     if "FINETUNING" in experiment_type or "EVALUATION" in experiment_type:
-        if checkpoint_ref != "":
-            checkpoint = torch.load(checkpoint_path, map_location=cst.DEVICE, weights_only=True)
+        if checkpoint_ref == "":
+            raise ValueError(
+                "experiment.type includes FINETUNING/EVALUATION but "
+                "experiment.checkpoint_reference is empty."
+            )
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(
+                f"checkpoint not found at `{checkpoint_path}`. "
+                "Set experiment.checkpoint_reference to a valid checkpoint path."
+            )
+        checkpoint = torch.load(checkpoint_path, map_location=cst.DEVICE, weights_only=True)
             
         print("Loading model from checkpoint: ", config.experiment.checkpoint_reference) 
         lr = checkpoint["hyper_parameters"]["lr"]
@@ -356,6 +399,14 @@ def train(config: Config, trainer: L.Trainer, run=None):
 
 def run_wandb(config: Config, accelerator):
     def wandb_sweep_callback():
+        try:
+            import wandb  # type: ignore
+            from lightning.pytorch.loggers import WandbLogger
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "wandb is required when experiment.is_wandb=true. "
+                "Install it with `pip install wandb` or set experiment.is_wandb=false."
+            ) from exc
         wandb_logger = WandbLogger(project=cst.PROJECT_NAME, log_model=False, save_dir=cst.DIR_SAVED_MODEL)
         run_name = None
         if not config.experiment.is_sweep:
@@ -370,7 +421,16 @@ def run_wandb(config: Config, accelerator):
                 else:
                     run_name += str(param[:2]) + "_" + str(value.value) + "_"
 
-        run = wandb.init(project=cst.PROJECT_NAME, name=run_name, entity="") # set entity to your wandb username
+        wandb_mode = None
+        if not os.getenv("WANDB_API_KEY"):
+            wandb_mode = "offline"
+            print("WANDB_API_KEY not set. Running Weights & Biases in offline mode.")
+        run = wandb.init(
+            project=cst.PROJECT_NAME,
+            name=run_name,
+            entity="",
+            mode=wandb_mode,
+        ) # set entity to your wandb username
         
         if config.experiment.is_sweep:
             model_params = run.config
@@ -430,8 +490,20 @@ def run_wandb(config: Config, accelerator):
   
     
 def sweep_init(config: Config):
-    # put your wandb key here
-    wandb.login("")
+    try:
+        import wandb  # type: ignore
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "wandb is required when experiment.is_sweep=true. "
+            "Install it with `pip install wandb`."
+        ) from exc
+    api_key = os.getenv("WANDB_API_KEY", "").strip()
+    if api_key == "":
+        raise RuntimeError(
+            "WANDB_API_KEY is required when experiment.is_sweep=true. "
+            "Set WANDB_API_KEY in the environment."
+        )
+    wandb.login(key=api_key)
     parameters = {}
     for key in config.model.hyperparameters_sweep.keys():
         parameters[key] = {'values': list(config.model.hyperparameters_sweep[key])}
@@ -467,4 +539,3 @@ def print_setup(config: Config):
     if config.dataset.type == cst.DatasetType.LOBSTER:
         print("Training stocks: ", config.dataset.training_stocks)
         print("Testing stocks: ", config.dataset.testing_stocks)
-

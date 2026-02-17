@@ -6,13 +6,17 @@ from torch import nn
 import os
 import torch
 import matplotlib.pyplot as plt
-import wandb
 import seaborn as sns
 from lion_pytorch import Lion
 from torch_ema import ExponentialMovingAverage
 from utils.utils_model import pick_model
 import constants as cst
 from scipy.stats import mode
+
+try:
+    import wandb  # type: ignore
+except ModuleNotFoundError:
+    wandb = None
 
 
 class Engine(LightningModule):
@@ -168,7 +172,12 @@ class Engine(LightningModule):
     
     def log_losses_to_wandb(self, train_loss, val_loss):
         """Log training and validation losses to wandb in the same plot."""
-        if self.is_wandb:   
+        if self.is_wandb:
+            if wandb is None:
+                raise RuntimeError(
+                    "wandb is required when experiment.is_wandb=true. "
+                    "Install it with `pip install wandb` or set experiment.is_wandb=false."
+                )
             # Log combined losses for a single plot
             wandb.log({
                 "losses": {
@@ -268,6 +277,11 @@ class Engine(LightningModule):
         plt.ylabel('Precision')
         plt.title('Precision-Recall Curve')
         if is_wandb:
+            if wandb is None:
+                raise RuntimeError(
+                    "wandb is required when experiment.is_wandb=true. "
+                    "Install it with `pip install wandb` or set experiment.is_wandb=false."
+                )
             wandb.log({f"precision_recall_curve_{self.dataset_type}": wandb.Image(plt)})
         plt.savefig(cst.DIR_SAVED_MODEL + "/" + str(self.model_type) + "/" +f"precision_recall_curve_{self.dataset_type}.svg")
         #plt.show()
@@ -297,6 +311,5 @@ def compute_most_attended(att_feature):
                 # Store the average value
                 average_values[layer, head, seq] = avg_value
     return most_frequent_indices, average_values
-
 
 

@@ -4,22 +4,16 @@ import pandas as pd
 import numpy as np
 import torch
 import constants as cst
-from torch.utils import data
+from constants import SamplingType
 
 
 def lobster_load(path, all_features, len_smooth, h, seq_size):
     set = np.load(path)
-    if h == 10:
-        tmp = 5
-    if h == 20:
-        tmp = 4
-    elif h == 50:
-        tmp = 3
-    elif h == 100:
-        tmp = 2
-    elif h == 200:
-        tmp = 1
-    labels = set[seq_size-len_smooth:, -tmp]
+    horizon_to_col_from_end = {10: 4, 20: 3, 50: 2, 100: 1}
+    if h not in horizon_to_col_from_end:
+        raise ValueError(f"unsupported horizon `{h}` for LOBSTER dataset; expected 10|20|50|100")
+    label_col_from_end = horizon_to_col_from_end[h]
+    labels = set[seq_size-len_smooth:, -label_col_from_end]
     labels = labels[np.isfinite(labels)]
     labels = torch.from_numpy(labels).long()
     if all_features:
@@ -337,9 +331,10 @@ class LOBSTERDataBuilder:
         dataframes = reset_indexes(dataframes)
 
         # sample the dataframes according to the sampling type
-        if sampling_type == "time":
+        sampling_type_value = sampling_type.value if isinstance(sampling_type, SamplingType) else str(sampling_type).lower()
+        if sampling_type_value == SamplingType.TIME.value:
             dataframes = self._sampling_time(dataframes, time)
-        elif sampling_type == "quantity":
+        elif sampling_type_value == SamplingType.QUANTITY.value:
             dataframes = self._sampling_quantity(dataframes, quantity)
             
         dataframes = reset_indexes(dataframes)
