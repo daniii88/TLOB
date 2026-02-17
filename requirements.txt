@@ -1,4 +1,4 @@
---extra-index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://download.pytorch.org/whl/cu128
 
 einops
 hydra-core
@@ -13,8 +13,8 @@ Requests
 scikit_learn
 scipy
 seaborn
-torch==2.5.0+cu121
-torchvision==0.20.0+cu121
+torch==2.9.1+cu128
+torchvision==0.24.1+cu128
 torch_ema
 transformers
 wandb
