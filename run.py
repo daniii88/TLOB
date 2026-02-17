@@ -11,7 +11,7 @@ from preprocessing.fi_2010 import fi_2010_load
 from preprocessing.lobster import lobster_load
 from preprocessing.btc import btc_load
 from preprocessing.engine import engine_load
-from preprocessing.dataset import Dataset, DataModule
+from preprocessing.dataset import Dataset, DataModule, safe_collate
 import constants as cst
 from constants import DatasetType, SamplingType
 torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
@@ -168,7 +168,8 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 pin_memory=True,
                 drop_last=False,
                 num_workers=4,
-                persistent_workers=True
+                persistent_workers=True,
+                collate_fn=safe_collate,
             )
             test_loaders.append(test_dataloader)
         

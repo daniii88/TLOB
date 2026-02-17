@@ -29,7 +29,15 @@ class Dataset(data.Dataset):
     def __getitem__(self, i):
         input = self.x[i:i+self.seq_size, :]
         return input, self.y[i]
-    
+
+
+def safe_collate(batch):
+    """Collate without shared-memory resize path that breaks on non-resizable storages."""
+    inputs, labels = zip(*batch)
+    inputs = torch.stack(tuple(x.contiguous() for x in inputs), dim=0)
+    labels = torch.stack(tuple(y for y in labels), dim=0)
+    return inputs, labels
+
 
 class DataModule(pl.LightningDataModule):
     def   __init__(self, train_set, val_set, batch_size, test_batch_size,  is_shuffle_train=True, test_set=None, num_workers=16):
@@ -55,7 +63,8 @@ class DataModule(pl.LightningDataModule):
             pin_memory=self.pin_memory,
             drop_last=False,
             num_workers=self.num_workers,
-            persistent_workers=True
+            persistent_workers=self.num_workers > 0,
+            collate_fn=safe_collate,
         )
 
     def val_dataloader(self):
@@ -66,7 +75,8 @@ class DataModule(pl.LightningDataModule):
             pin_memory=self.pin_memory,
             drop_last=False,
             num_workers=self.num_workers,
-            persistent_workers=True
+            persistent_workers=self.num_workers > 0,
+            collate_fn=safe_collate,
         )
     
     def test_dataloader(self):
@@ -77,7 +87,8 @@ class DataModule(pl.LightningDataModule):
             pin_memory=self.pin_memory,
             drop_last=False,
             num_workers=self.num_workers,
-            persistent_workers=True
+            persistent_workers=self.num_workers > 0,
+            collate_fn=safe_collate,
         )
 
         
