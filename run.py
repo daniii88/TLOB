@@ -18,6 +18,8 @@ import constants as cst
 from constants import DatasetType, SamplingType
 torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
 
+MAX_WEIGHTED_SAMPLER_CATEGORIES = (1 << 24) - 1
+
 
 def class_distribution(labels: torch.Tensor):
     total = labels.shape[0]
@@ -43,7 +45,13 @@ def resolve_ckpt_dir(config: Config) -> None:
         config.experiment.dir_ckpt = default_ckpt_dir(config)
 
 
-def save_metrics_summary(config: Config, model_type: str, model: Engine, test_output: dict) -> str:
+def save_metrics_summary(
+    config: Config,
+    model_type: str,
+    model: Engine,
+    test_output: dict,
+    used_weighted_sampler: bool,
+) -> str:
     summary_dir = os.path.join(cst.DIR_SAVED_MODEL, model_type, config.experiment.dir_ckpt)
     os.makedirs(summary_dir, exist_ok=True)
     summary_path = os.path.join(summary_dir, "metrics_summary.json")
@@ -56,6 +64,7 @@ def save_metrics_summary(config: Config, model_type: str, model: Engine, test_ou
         "horizon": int(config.experiment.horizon),
         "loss_name": str(config.experiment.loss_name),
         "use_weighted_sampler": bool(config.dataset.use_weighted_sampler),
+        "used_weighted_sampler": bool(used_weighted_sampler),
         "weighted_sampler_pow": float(config.dataset.weighted_sampler_pow),
         "min_event_precision": float(config.experiment.min_event_precision),
         "val_metrics": getattr(model, "best_val_metrics", {}),
@@ -253,23 +262,35 @@ def train(config: Config, trainer: L.Trainer, run=None):
         class_weights = compute_class_weights(effective_train_labels, num_classes=3)
         print(f"Using weighted CE with class weights: {class_weights.tolist()}")
 
+    used_weighted_sampler = False
     if config.dataset.use_weighted_sampler:
-        sample_weights = compute_sample_weights(
-            effective_train_labels,
-            num_classes=3,
-            sampler_pow=config.dataset.weighted_sampler_pow,
-        )
-        train_sampler = WeightedRandomSampler(
-            weights=sample_weights.double(),
-            num_samples=sample_weights.numel(),
-            replacement=True,
-        )
-        data_module.train_sampler = train_sampler
-        data_module.is_shuffle_train = False
-        print(
-            "Using WeightedRandomSampler with "
-            f"pow={config.dataset.weighted_sampler_pow}"
-        )
+        n_categories = int(effective_train_labels.numel())
+        if n_categories > MAX_WEIGHTED_SAMPLER_CATEGORIES:
+            print(
+                "WeightedRandomSampler disabled: number of samples "
+                f"{n_categories} exceeds torch multinomial limit "
+                f"{MAX_WEIGHTED_SAMPLER_CATEGORIES}. Continuing without sampler."
+            )
+            data_module.train_sampler = None
+            data_module.is_shuffle_train = True
+        else:
+            sample_weights = compute_sample_weights(
+                effective_train_labels,
+                num_classes=3,
+                sampler_pow=config.dataset.weighted_sampler_pow,
+            )
+            train_sampler = WeightedRandomSampler(
+                weights=sample_weights.double(),
+                num_samples=sample_weights.numel(),
+                replacement=True,
+            )
+            data_module.train_sampler = train_sampler
+            data_module.is_shuffle_train = False
+            used_weighted_sampler = True
+            print(
+                "Using WeightedRandomSampler with "
+                f"pow={config.dataset.weighted_sampler_pow}"
+            )
     
     experiment_type = config.experiment.type
     if "FINETUNING" in experiment_type or "EVALUATION" in experiment_type:
@@ -485,7 +506,9 @@ def train(config: Config, trainer: L.Trainer, run=None):
             elif run is not None and dataset_type == "FI_2010":
                 run.log({f"f1 FI_2010 ": output[0]["f1_score"]}, commit=False)
         if primary_test_output is not None:
-            summary_path = save_metrics_summary(config, config.model.type.value, model, primary_test_output)
+            summary_path = save_metrics_summary(
+                config, config.model.type.value, model, primary_test_output, used_weighted_sampler
+            )
             print("Saved metrics summary: ", summary_path)
     else:
         primary_test_output = None
@@ -499,7 +522,9 @@ def train(config: Config, trainer: L.Trainer, run=None):
             elif run is not None and dataset_type == "FI_2010":
                 run.log({f"f1 FI_2010 ": output[0]["f1_score"]}, commit=False)
         if primary_test_output is not None:
-            summary_path = save_metrics_summary(config, config.model.type.value, model, primary_test_output)
+            summary_path = save_metrics_summary(
+                config, config.model.type.value, model, primary_test_output, used_weighted_sampler
+            )
             print("Saved metrics summary: ", summary_path)
             
     
