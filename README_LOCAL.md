@@ -123,6 +123,10 @@ Artifacts:
 - Guard: `val_event_precision >= 0.20`
 - Tiebreakers: higher `val_event_f1`, then lower `val_loss`
 - Fallback guard once to `0.15` if no run passes `0.20`
+- Additional logged diagnostics per run:
+  - `val_predicted_event_rate`, `val_event_pr_auc`
+  - `val_precision_top_0_1pct`, `val_precision_top_0_2pct`
+  - threshold sweep pick on event score (`0.20..0.95`) for `experiment.target_event_rate`
 
 Manual winner selection:
 

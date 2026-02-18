@@ -13,6 +13,7 @@
       "experiment.horizon": 100,
       "experiment.loss_name": "weighted_ce",
       "experiment.min_event_precision": 0.2,
+      "experiment.target_event_rate": 0.002,
       "dataset.batch_size": 128,
       "dataset.use_weighted_sampler": false,
       "dataset.weighted_sampler_pow": 1.0,

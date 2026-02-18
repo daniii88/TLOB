@@ -67,6 +67,7 @@ def save_metrics_summary(
         "used_weighted_sampler": bool(used_weighted_sampler),
         "weighted_sampler_pow": float(config.dataset.weighted_sampler_pow),
         "min_event_precision": float(config.experiment.min_event_precision),
+        "target_event_rate": float(config.experiment.target_event_rate),
         "val_metrics": getattr(model, "best_val_metrics", {}),
         "test_metrics": test_output,
     }
@@ -335,6 +336,7 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 loss_name=config.experiment.loss_name,
                 class_weights=class_weights,
                 min_event_precision=config.experiment.min_event_precision,
+                target_event_rate=config.experiment.target_event_rate,
                 map_location=cst.DEVICE,
                 )
         elif model_type == "TLOB":
@@ -358,6 +360,7 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 loss_name=config.experiment.loss_name,
                 class_weights=class_weights,
                 min_event_precision=config.experiment.min_event_precision,
+                target_event_rate=config.experiment.target_event_rate,
                 map_location=cst.DEVICE,
                 len_test_dataloader=len(test_loaders[0])
                 )
@@ -378,6 +381,7 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 loss_name=config.experiment.loss_name,
                 class_weights=class_weights,
                 min_event_precision=config.experiment.min_event_precision,
+                target_event_rate=config.experiment.target_event_rate,
                 map_location=cst.DEVICE,
                 len_test_dataloader=len(test_loaders[0])
                 )
@@ -398,6 +402,7 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 loss_name=config.experiment.loss_name,
                 class_weights=class_weights,
                 min_event_precision=config.experiment.min_event_precision,
+                target_event_rate=config.experiment.target_event_rate,
                 map_location=cst.DEVICE,
                 len_test_dataloader=len(test_loaders[0])
                 )
@@ -422,6 +427,7 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 loss_name=config.experiment.loss_name,
                 class_weights=class_weights,
                 min_event_precision=config.experiment.min_event_precision,
+                target_event_rate=config.experiment.target_event_rate,
             )
         elif model_type == cst.ModelType.TLOB:
             model = Engine(
@@ -444,6 +450,7 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 loss_name=config.experiment.loss_name,
                 class_weights=class_weights,
                 min_event_precision=config.experiment.min_event_precision,
+                target_event_rate=config.experiment.target_event_rate,
             )
         elif model_type == cst.ModelType.BINCTABL:
             model = Engine(
@@ -462,6 +469,7 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 loss_name=config.experiment.loss_name,
                 class_weights=class_weights,
                 min_event_precision=config.experiment.min_event_precision,
+                target_event_rate=config.experiment.target_event_rate,
             )
         elif model_type == cst.ModelType.DEEPLOB:
             model = Engine(
@@ -480,6 +488,7 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 loss_name=config.experiment.loss_name,
                 class_weights=class_weights,
                 min_event_precision=config.experiment.min_event_precision,
+                target_event_rate=config.experiment.target_event_rate,
             )
     
     print("total number of parameters: ", sum(p.numel() for p in model.parameters()))   
@@ -662,6 +671,7 @@ def print_setup(config: Config):
     print("Is debug: ", config.experiment.is_debug) 
     print("Loss: ", config.experiment.loss_name)
     print("Min event precision: ", config.experiment.min_event_precision)
+    print("Target event rate: ", config.experiment.target_event_rate)
     print("Use weighted sampler: ", config.dataset.use_weighted_sampler)
     print("Weighted sampler pow: ", config.dataset.weighted_sampler_pow)
     if config.dataset.type == cst.DatasetType.LOBSTER:

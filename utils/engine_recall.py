@@ -74,6 +74,86 @@ def compute_event_metrics(
     }
 
 
+def predicted_event_rate(
+    predictions: Iterable[int] | torch.Tensor | np.ndarray,
+    neutral_class: int = 1,
+) -> float:
+    y_pred = _as_long_tensor(predictions).numpy()
+    return float((y_pred != neutral_class).mean()) if y_pred.size > 0 else 0.0
+
+
+def precision_at_top_percent(
+    targets: Iterable[int] | torch.Tensor | np.ndarray,
+    event_scores: Iterable[float] | torch.Tensor | np.ndarray,
+    top_percent: float,
+    neutral_class: int = 1,
+) -> float:
+    y_true = _as_long_tensor(targets).numpy()
+    if isinstance(event_scores, torch.Tensor):
+        scores = event_scores.detach().cpu().numpy().astype(np.float64)
+    elif isinstance(event_scores, np.ndarray):
+        scores = event_scores.astype(np.float64)
+    else:
+        scores = np.asarray(list(event_scores), dtype=np.float64)
+    n = y_true.shape[0]
+    if n == 0:
+        return 0.0
+    k = max(1, int(round(n * top_percent)))
+    idx = np.argpartition(scores, -k)[-k:]
+    return float((y_true[idx] != neutral_class).mean())
+
+
+def threshold_sweep_event_metrics(
+    targets: Iterable[int] | torch.Tensor | np.ndarray,
+    event_scores: Iterable[float] | torch.Tensor | np.ndarray,
+    thresholds: Iterable[float],
+    neutral_class: int = 1,
+) -> list[dict[str, float]]:
+    y_true = _as_long_tensor(targets).numpy()
+    if isinstance(event_scores, torch.Tensor):
+        scores = event_scores.detach().cpu().numpy().astype(np.float64)
+    elif isinstance(event_scores, np.ndarray):
+        scores = event_scores.astype(np.float64)
+    else:
+        scores = np.asarray(list(event_scores), dtype=np.float64)
+
+    true_event = y_true != neutral_class
+    rows = []
+    for th in thresholds:
+        pred_event = scores >= float(th)
+        tp = int(np.logical_and(true_event, pred_event).sum())
+        fp = int(np.logical_and(~true_event, pred_event).sum())
+        fn = int(np.logical_and(true_event, ~pred_event).sum())
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+        rows.append(
+            {
+                "threshold": float(th),
+                "precision": float(precision),
+                "recall": float(recall),
+                "f1": float(f1),
+                "predicted_event_rate": float(pred_event.mean()),
+            }
+        )
+    return rows
+
+
+def pick_threshold_for_target_rate(
+    sweep_rows: list[dict[str, float]],
+    target_rate: float,
+) -> Optional[dict[str, float]]:
+    if not sweep_rows:
+        return None
+    eligible = [r for r in sweep_rows if r["predicted_event_rate"] <= target_rate]
+    if not eligible:
+        return min(sweep_rows, key=lambda r: abs(r["predicted_event_rate"] - target_rate))
+    return sorted(
+        eligible,
+        key=lambda r: (-r["precision"], -r["recall"], r["predicted_event_rate"]),
+    )[0]
+
+
 def select_best_run(
     runs: list[dict],
     min_event_precision: float = 0.20,

@@ -7,6 +7,10 @@ from utils.engine_recall import (
     compute_class_weights,
     compute_event_metrics,
     compute_sample_weights,
+    predicted_event_rate,
+    precision_at_top_percent,
+    threshold_sweep_event_metrics,
+    pick_threshold_for_target_rate,
     select_best_run,
 )
 
@@ -50,6 +54,25 @@ class EngineRecallUtilsTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["event_precision"], 0.75, places=6)
         self.assertAlmostEqual(metrics["event_recall"], 0.75, places=6)
         self.assertAlmostEqual(metrics["event_f1"], 0.75, places=6)
+
+    def test_predicted_event_rate(self):
+        preds = [1, 1, 0, 2, 1]
+        self.assertAlmostEqual(predicted_event_rate(preds), 0.4, places=6)
+
+    def test_precision_at_top_percent(self):
+        targets = [1, 1, 0, 2, 1, 0]
+        scores = [0.1, 0.2, 0.95, 0.9, 0.3, 0.85]
+        p_top = precision_at_top_percent(targets, scores, top_percent=0.5)
+        self.assertAlmostEqual(p_top, 1.0, places=6)
+
+    def test_threshold_sweep_and_pick(self):
+        targets = [1, 1, 0, 2, 1, 0, 2, 1]
+        scores = [0.1, 0.2, 0.95, 0.9, 0.3, 0.85, 0.8, 0.05]
+        rows = threshold_sweep_event_metrics(targets, scores, thresholds=[0.5, 0.8, 0.95])
+        self.assertEqual(len(rows), 3)
+        pick = pick_threshold_for_target_rate(rows, target_rate=0.4)
+        self.assertIsNotNone(pick)
+        self.assertLessEqual(pick["predicted_event_rate"], 0.4)
 
     def test_select_best_run_guard_and_fallback(self):
         runs = [

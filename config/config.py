@@ -98,6 +98,7 @@ class Experiment:
     optimizer: str = "Adam"
     loss_name: str = "ce"
     min_event_precision: float = 0.20
+    target_event_rate: float = 0.002
     
 defaults = [Model, Experiment, Dataset]
 
