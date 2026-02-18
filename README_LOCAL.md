@@ -90,3 +90,76 @@ Optional: inspect usable-data quality report
 cd /home/daniii/code/lob_model
 make analyze-engine-dataset
 ```
+
+## ENGINE/TLOB Recall Optimization (h100)
+
+Use profile:
+
+- `profiles/engine_tlob_h100_recall.json`
+
+### 6-run matrix (3 alpha variants x 2 training variants)
+
+This runs:
+
+- `alpha_mult` in `{0.50, 0.35, 0.20}`
+- Variant A: `weighted_ce` + no sampler
+- Variant B: `weighted_ce` + `WeightedRandomSampler` (`pow=1.0`)
+
+Command:
+
+```bash
+cd /home/daniii/code/lob_model
+make engine-recall-matrix ENGINE_EXPORT=/code/dydx-highrisk-engine/reports/entry_signal_snapshots
+```
+
+Artifacts:
+
+- Matrix results: `artifacts/engine_h100_recall_matrix.json`
+- Per-run metrics: `data/checkpoints/TLOB/<dir_ckpt>/metrics_summary.json`
+
+### Winner selection rule
+
+- Primary sort: highest `val_event_recall`
+- Guard: `val_event_precision >= 0.20`
+- Tiebreakers: higher `val_event_f1`, then lower `val_loss`
+- Fallback guard once to `0.15` if no run passes `0.20`
+
+Manual winner selection:
+
+```bash
+cd /home/daniii/code/lob_model
+make engine-select-winner
+```
+
+### Hourly batch rebuild + retrain
+
+Run one cycle:
+
+```bash
+cd /home/daniii/code/lob_model
+make engine-hourly-once ENGINE_EXPORT=/code/dydx-highrisk-engine/reports/entry_signal_snapshots
+```
+
+Run continuously (every hour):
+
+```bash
+cd /home/daniii/code/lob_model
+python3 scripts/hourly_engine_retrain.py \
+  --input /code/dydx-highrisk-engine/reports/entry_signal_snapshots \
+  --winner-json artifacts/engine_h100_recall_matrix.json
+```
+
+Retention policy in batch script:
+
+- Keep latest run
+- Keep top 3 by `val_event_recall`
+- Prune older runs for prefix `ENGINE_live_h100*`
+
+### Smoke test for 3 training modes
+
+Runs one short training per mode on synthetic ENGINE splits:
+
+```bash
+cd /home/daniii/code/lob_model
+make engine-smoke-modes
+```

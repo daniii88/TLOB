@@ -10,6 +10,7 @@ import seaborn as sns
 from lion_pytorch import Lion
 from torch_ema import ExponentialMovingAverage
 from utils.utils_model import pick_model
+from utils.engine_recall import compute_event_metrics
 import constants as cst
 from scipy.stats import mode
 
@@ -38,6 +39,9 @@ class Engine(LightningModule):
         num_heads=8,
         is_sin_emb=True,
         len_test_dataloader=None,
+        loss_name="ce",
+        class_weights=None,
+        min_event_precision=0.20,
     ):
         super().__init__()
         self.seq_size = seq_size
@@ -55,10 +59,20 @@ class Engine(LightningModule):
         self.num_layers = num_layers
         self.num_features = num_features
         self.experiment_type = experiment_type
+        self.loss_name = str(loss_name).lower()
+        self.min_event_precision = float(min_event_precision)
         self.model = pick_model(model_type, hidden_dim, num_layers, seq_size, num_features, num_heads, is_sin_emb, dataset_type) 
         self.ema = ExponentialMovingAverage(self.parameters(), decay=0.999)
         self.ema.to(cst.DEVICE)
-        self.loss_function = nn.CrossEntropyLoss()
+        if class_weights is not None:
+            class_weights = torch.as_tensor(class_weights, dtype=torch.float32)
+        self.register_buffer("loss_class_weights", class_weights)
+        if self.loss_name == "weighted_ce":
+            if self.loss_class_weights is None:
+                raise ValueError("loss_name=weighted_ce requires class_weights.")
+            self.loss_function = nn.CrossEntropyLoss(weight=self.loss_class_weights)
+        else:
+            self.loss_function = nn.CrossEntropyLoss()
         self.train_losses = []
         self.val_losses = []
         self.test_losses = []
@@ -73,6 +87,8 @@ class Engine(LightningModule):
         self.last_path_ckpt = None
         self.first_test = True
         self.test_mid_prices = []
+        self.best_val_metrics = {}
+        self.final_test_metrics = {}
         
     def forward(self, x, batch_idx=None):
         output = self.model(x)
@@ -112,8 +128,12 @@ class Engine(LightningModule):
         x, y = batch
         mid_prices = ((x[:, 0, 0] + x[:, 0, 2]) // 2).cpu().numpy().flatten()
         self.test_mid_prices.append(mid_prices)
+        in_training_mode = self.experiment_type == "TRAINING" or (
+            isinstance(self.experiment_type, (list, tuple, set))
+            and "TRAINING" in self.experiment_type
+        )
         # Test: with EMA
-        if self.experiment_type == "TRAINING":
+        if in_training_mode:
             with self.ema.average_parameters():
                 y_hat = self.forward(x, batch_idx)
                 batch_loss = self.loss(y_hat, y)
@@ -142,31 +162,53 @@ class Engine(LightningModule):
     def on_validation_epoch_end(self) -> None:
         self.val_loss = sum(self.val_losses) / len(self.val_losses)
         self.val_losses = []
-        
+
+        targets = np.concatenate(self.val_targets)
+        predictions = np.concatenate(self.val_predictions)
+        class_report = classification_report(
+            targets, predictions, digits=4, output_dict=True, zero_division=0
+        )
+        event_metrics = compute_event_metrics(targets, predictions)
+
         # model checkpointing
         if self.val_loss < self.min_loss:
             # if the improvement is less than 0.0002, we halve the learning rate
             if self.val_loss - self.min_loss > -0.002:
-                self.optimizer.param_groups[0]["lr"] /= 2  
+                self.optimizer.param_groups[0]["lr"] /= 2
             self.min_loss = self.val_loss
+            self.best_val_metrics = {
+                "val_loss": float(self.val_loss),
+                "val_f1_score": float(class_report["macro avg"]["f1-score"]),
+                "val_accuracy": float(class_report["accuracy"]),
+                "val_precision": float(class_report["macro avg"]["precision"]),
+                "val_recall": float(class_report["macro avg"]["recall"]),
+                "val_event_precision": float(event_metrics["event_precision"]),
+                "val_event_recall": float(event_metrics["event_recall"]),
+                "val_event_f1": float(event_metrics["event_f1"]),
+            }
             self.model_checkpointing(self.val_loss)
         else:
             self.optimizer.param_groups[0]["lr"] /= 2
-        
+
         # Log losses to wandb (both individually and in the same plot)
         self.log_losses_to_wandb(self.current_train_loss, self.val_loss)
-        
+
         # Continue with regular Lightning logging for compatibility
         self.log("val_loss", self.val_loss)
-        print(f'Validation loss on epoch {self.current_epoch}: {self.val_loss}')
-        targets = np.concatenate(self.val_targets)    
-        predictions = np.concatenate(self.val_predictions)
-        class_report = classification_report(targets, predictions, digits=4, output_dict=True)
-        print(classification_report(targets, predictions, digits=4))
+        print(f"Validation loss on epoch {self.current_epoch}: {self.val_loss}")
+        print(classification_report(targets, predictions, digits=4, zero_division=0))
         self.log("val_f1_score", class_report["macro avg"]["f1-score"])
         self.log("val_accuracy", class_report["accuracy"])
         self.log("val_precision", class_report["macro avg"]["precision"])
         self.log("val_recall", class_report["macro avg"]["recall"])
+        self.log("val_event_precision", event_metrics["event_precision"])
+        self.log("val_event_recall", event_metrics["event_recall"])
+        self.log("val_event_f1", event_metrics["event_f1"])
+        print(
+            f"Validation event metrics: precision={event_metrics['event_precision']:.4f} "
+            f"recall={event_metrics['event_recall']:.4f} f1={event_metrics['event_f1']:.4f} "
+            f"(guard={self.min_event_precision:.2f})"
+        )
         self.val_targets = []
         self.val_predictions = [] 
     
@@ -192,13 +234,34 @@ class Engine(LightningModule):
         predictions = np.concatenate(self.test_predictions)
         predictions_path = os.path.join(cst.DIR_SAVED_MODEL, str(self.model_type), self.dir_ckpt, "predictions")
         np.save(predictions_path, predictions)
-        class_report = classification_report(targets, predictions, digits=4, output_dict=True)
-        print(classification_report(targets, predictions, digits=4))
-        self.log("test_loss", sum(self.test_losses) / len(self.test_losses))
+        class_report = classification_report(
+            targets, predictions, digits=4, output_dict=True, zero_division=0
+        )
+        event_metrics = compute_event_metrics(targets, predictions)
+        test_loss = sum(self.test_losses) / len(self.test_losses)
+        print(classification_report(targets, predictions, digits=4, zero_division=0))
+        self.log("test_loss", test_loss)
         self.log("f1_score", class_report["macro avg"]["f1-score"])
         self.log("accuracy", class_report["accuracy"])
         self.log("precision", class_report["macro avg"]["precision"])
         self.log("recall", class_report["macro avg"]["recall"])
+        self.log("test_event_precision", event_metrics["event_precision"])
+        self.log("test_event_recall", event_metrics["event_recall"])
+        self.log("test_event_f1", event_metrics["event_f1"])
+        self.final_test_metrics = {
+            "test_loss": float(test_loss),
+            "f1_score": float(class_report["macro avg"]["f1-score"]),
+            "accuracy": float(class_report["accuracy"]),
+            "precision": float(class_report["macro avg"]["precision"]),
+            "recall": float(class_report["macro avg"]["recall"]),
+            "test_event_precision": float(event_metrics["event_precision"]),
+            "test_event_recall": float(event_metrics["event_recall"]),
+            "test_event_f1": float(event_metrics["event_f1"]),
+        }
+        print(
+            f"Test event metrics: precision={event_metrics['event_precision']:.4f} "
+            f"recall={event_metrics['event_recall']:.4f} f1={event_metrics['event_f1']:.4f}"
+        )
         self.test_targets = []
         self.test_predictions = []
         self.test_losses = []  
@@ -311,5 +374,4 @@ def compute_most_attended(att_feature):
                 # Store the average value
                 average_values[layer, head, seq] = avg_value
     return most_frequent_indices, average_values
-
 

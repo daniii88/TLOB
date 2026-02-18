@@ -41,6 +41,8 @@ class Dataset:
     dates: list = MISSING
     batch_size: int = MISSING
     data_path: str = ""
+    use_weighted_sampler: bool = False
+    weighted_sampler_pow: float = 1.0
 
 @dataclass
 class FI_2010(Dataset):
@@ -94,6 +96,8 @@ class Experiment:
     max_epochs: int = 10
     dir_ckpt: str = "model.ckpt"
     optimizer: str = "Adam"
+    loss_name: str = "ce"
+    min_event_precision: float = 0.20
     
 defaults = [Model, Experiment, Dataset]
 

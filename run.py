@@ -2,7 +2,8 @@ import lightning as L
 import omegaconf
 import torch
 import os
-from torch.utils.data import DataLoader
+import json
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from lightning.pytorch.callbacks import TQDMProgressBar
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from config.config import Config
@@ -12,6 +13,7 @@ from preprocessing.lobster import lobster_load
 from preprocessing.btc import btc_load
 from preprocessing.engine import engine_load
 from preprocessing.dataset import Dataset, DataModule, safe_collate
+from utils.engine_recall import compute_class_weights, compute_sample_weights
 import constants as cst
 from constants import DatasetType, SamplingType
 torch.serialization.add_safe_globals([omegaconf.listconfig.ListConfig])
@@ -26,15 +28,52 @@ def class_distribution(labels: torch.Tensor):
     return {cls: counts_by_class.get(cls, 0) / total for cls in (0, 1, 2)}
 
 
-def run(config: Config, accelerator):
+def default_ckpt_dir(config: Config) -> str:
     seq_size = config.model.hyperparameters_fixed["seq_size"]
     dataset = config.dataset.type.value
     horizon = config.experiment.horizon
     if dataset == "LOBSTER":
         training_stocks = config.dataset.training_stocks
-        config.experiment.dir_ckpt = f"{dataset}_{training_stocks}_seq_size_{seq_size}_horizon_{horizon}_seed_{config.experiment.seed}"
-    else:
-        config.experiment.dir_ckpt = f"{dataset}_seq_size_{seq_size}_horizon_{horizon}_seed_{config.experiment.seed}"
+        return f"{dataset}_{training_stocks}_seq_size_{seq_size}_horizon_{horizon}_seed_{config.experiment.seed}"
+    return f"{dataset}_seq_size_{seq_size}_horizon_{horizon}_seed_{config.experiment.seed}"
+
+
+def resolve_ckpt_dir(config: Config) -> None:
+    if config.experiment.dir_ckpt in {"", "model.ckpt"}:
+        config.experiment.dir_ckpt = default_ckpt_dir(config)
+
+
+def save_metrics_summary(config: Config, model_type: str, model: Engine, test_output: dict) -> str:
+    summary_dir = os.path.join(cst.DIR_SAVED_MODEL, model_type, config.experiment.dir_ckpt)
+    os.makedirs(summary_dir, exist_ok=True)
+    summary_path = os.path.join(summary_dir, "metrics_summary.json")
+    summary = {
+        "dataset": config.dataset.type.value,
+        "data_path": config.dataset.data_path,
+        "model_type": model_type,
+        "dir_ckpt": config.experiment.dir_ckpt,
+        "seed": int(config.experiment.seed),
+        "horizon": int(config.experiment.horizon),
+        "loss_name": str(config.experiment.loss_name),
+        "use_weighted_sampler": bool(config.dataset.use_weighted_sampler),
+        "weighted_sampler_pow": float(config.dataset.weighted_sampler_pow),
+        "min_event_precision": float(config.experiment.min_event_precision),
+        "val_metrics": getattr(model, "best_val_metrics", {}),
+        "test_metrics": test_output,
+    }
+    flat = {}
+    for key, value in summary["val_metrics"].items():
+        flat[key] = value
+    for key, value in summary["test_metrics"].items():
+        flat[key] = value
+    summary["flat_metrics"] = flat
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+    return summary_path
+
+
+def run(config: Config, accelerator):
+    resolve_ckpt_dir(config)
 
     trainer = L.Trainer(
         accelerator=accelerator,
@@ -61,6 +100,7 @@ def train(config: Config, trainer: L.Trainer, run=None):
     checkpoint_ref = config.experiment.checkpoint_reference
     checkpoint_path = os.path.join(cst.DIR_SAVED_MODEL, model_type.value, checkpoint_ref)
     dataset_type = config.dataset.type.value
+    class_weights = None
     if dataset_type == "FI_2010":
         path = config.dataset.data_path
         train_input, train_labels, val_input, val_labels, test_input, test_labels = fi_2010_load(path, seq_size, horizon, config.model.hyperparameters_fixed["all_features"])
@@ -68,9 +108,9 @@ def train(config: Config, trainer: L.Trainer, run=None):
         val_set = Dataset(val_input, val_labels, seq_size)
         test_set = Dataset(test_input, test_labels, seq_size)
         if config.experiment.is_debug:
-            train_set.length = 1000
-            val_set.length = 1000
-            test_set.length = 10000
+            train_set.length = min(train_set.length, 1000)
+            val_set.length = min(val_set.length, 1000)
+            test_set.length = min(test_set.length, 10000)
         data_module = DataModule(
             train_set=Dataset(train_input, train_labels, seq_size),
             val_set=Dataset(val_input, val_labels, seq_size),
@@ -89,9 +129,9 @@ def train(config: Config, trainer: L.Trainer, run=None):
         val_set = Dataset(val_input, val_labels, seq_size)
         test_set = Dataset(test_input, test_labels, seq_size)
         if config.experiment.is_debug:
-            train_set.length = 1000
-            val_set.length = 1000
-            test_set.length = 10000
+            train_set.length = min(train_set.length, 1000)
+            val_set.length = min(val_set.length, 1000)
+            test_set.length = min(test_set.length, 10000)
         data_module = DataModule(
             train_set=train_set,
             val_set=val_set,
@@ -116,9 +156,9 @@ def train(config: Config, trainer: L.Trainer, run=None):
         val_set = Dataset(val_input, val_labels, seq_size)
         test_set = Dataset(test_input, test_labels, seq_size)
         if config.experiment.is_debug:
-            train_set.length = 1000
-            val_set.length = 1000
-            test_set.length = 10000
+            train_set.length = min(train_set.length, 1000)
+            val_set.length = min(val_set.length, 1000)
+            test_set.length = min(test_set.length, 10000)
         data_module = DataModule(
             train_set=train_set,
             val_set=val_set,
@@ -176,9 +216,9 @@ def train(config: Config, trainer: L.Trainer, run=None):
         train_set = Dataset(train_input, train_labels, seq_size)
         val_set = Dataset(val_input, val_labels, seq_size)
         if config.experiment.is_debug:
-            train_set.length = 1000
-            val_set.length = 1000
-            test_set.length = 10000
+            train_set.length = min(train_set.length, 1000)
+            val_set.length = min(val_set.length, 1000)
+            test_set.length = min(test_set.length, 10000)
         data_module = DataModule(
             train_set=train_set,
             val_set=val_set,
@@ -200,6 +240,36 @@ def train(config: Config, trainer: L.Trainer, run=None):
     print(f"Classes distribution in val set: up {counts_val[0]:.2f} stat {counts_val[1]:.2f} down {counts_val[2]:.2f}")
     print(f"Classes distribution in test set: up {counts_test[0]:.2f} stat {counts_test[1]:.2f} down {counts_test[2]:.2f}")
     print()
+
+    loss_name = str(config.experiment.loss_name).lower()
+    if loss_name not in {"ce", "weighted_ce"}:
+        raise ValueError(
+            f"unsupported experiment.loss_name `{config.experiment.loss_name}`; expected `ce` or `weighted_ce`"
+        )
+
+    effective_train_labels = train_set.y[: train_set.length]
+
+    if loss_name == "weighted_ce":
+        class_weights = compute_class_weights(effective_train_labels, num_classes=3)
+        print(f"Using weighted CE with class weights: {class_weights.tolist()}")
+
+    if config.dataset.use_weighted_sampler:
+        sample_weights = compute_sample_weights(
+            effective_train_labels,
+            num_classes=3,
+            sampler_pow=config.dataset.weighted_sampler_pow,
+        )
+        train_sampler = WeightedRandomSampler(
+            weights=sample_weights.double(),
+            num_samples=sample_weights.numel(),
+            replacement=True,
+        )
+        data_module.train_sampler = train_sampler
+        data_module.is_shuffle_train = False
+        print(
+            "Using WeightedRandomSampler with "
+            f"pow={config.dataset.weighted_sampler_pow}"
+        )
     
     experiment_type = config.experiment.type
     if "FINETUNING" in experiment_type or "EVALUATION" in experiment_type:
@@ -241,6 +311,9 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 num_layers=num_layers,
                 num_features=train_input.shape[1],
                 dataset_type=dataset_type,
+                loss_name=config.experiment.loss_name,
+                class_weights=class_weights,
+                min_event_precision=config.experiment.min_event_precision,
                 map_location=cst.DEVICE,
                 )
         elif model_type == "TLOB":
@@ -261,6 +334,9 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 dataset_type=dataset_type,
                 num_heads=checkpoint["hyper_parameters"]["num_heads"],
                 is_sin_emb=checkpoint["hyper_parameters"]["is_sin_emb"],
+                loss_name=config.experiment.loss_name,
+                class_weights=class_weights,
+                min_event_precision=config.experiment.min_event_precision,
                 map_location=cst.DEVICE,
                 len_test_dataloader=len(test_loaders[0])
                 )
@@ -278,6 +354,9 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 dir_ckpt=dir_ckpt,
                 num_features=train_input.shape[1],
                 dataset_type=dataset_type,
+                loss_name=config.experiment.loss_name,
+                class_weights=class_weights,
+                min_event_precision=config.experiment.min_event_precision,
                 map_location=cst.DEVICE,
                 len_test_dataloader=len(test_loaders[0])
                 )
@@ -295,6 +374,9 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 dir_ckpt=dir_ckpt,
                 num_features=train_input.shape[1],
                 dataset_type=dataset_type,
+                loss_name=config.experiment.loss_name,
+                class_weights=class_weights,
+                min_event_precision=config.experiment.min_event_precision,
                 map_location=cst.DEVICE,
                 len_test_dataloader=len(test_loaders[0])
                 )
@@ -315,7 +397,10 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 num_layers=config.model.hyperparameters_fixed["num_layers"],
                 num_features=train_input.shape[1],
                 dataset_type=dataset_type,
-                len_test_dataloader=len(test_loaders[0])
+                len_test_dataloader=len(test_loaders[0]),
+                loss_name=config.experiment.loss_name,
+                class_weights=class_weights,
+                min_event_precision=config.experiment.min_event_precision,
             )
         elif model_type == cst.ModelType.TLOB:
             model = Engine(
@@ -334,7 +419,10 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 dataset_type=dataset_type,
                 num_heads=config.model.hyperparameters_fixed["num_heads"],
                 is_sin_emb=config.model.hyperparameters_fixed["is_sin_emb"],
-                len_test_dataloader=len(test_loaders[0])
+                len_test_dataloader=len(test_loaders[0]),
+                loss_name=config.experiment.loss_name,
+                class_weights=class_weights,
+                min_event_precision=config.experiment.min_event_precision,
             )
         elif model_type == cst.ModelType.BINCTABL:
             model = Engine(
@@ -349,7 +437,10 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 dir_ckpt=config.experiment.dir_ckpt,
                 num_features=train_input.shape[1],
                 dataset_type=dataset_type,
-                len_test_dataloader=len(test_loaders[0])
+                len_test_dataloader=len(test_loaders[0]),
+                loss_name=config.experiment.loss_name,
+                class_weights=class_weights,
+                min_event_precision=config.experiment.min_event_precision,
             )
         elif model_type == cst.ModelType.DEEPLOB:
             model = Engine(
@@ -364,7 +455,10 @@ def train(config: Config, trainer: L.Trainer, run=None):
                 dir_ckpt=config.experiment.dir_ckpt,
                 num_features=train_input.shape[1],
                 dataset_type=dataset_type,
-                len_test_dataloader=len(test_loaders[0])
+                len_test_dataloader=len(test_loaders[0]),
+                loss_name=config.experiment.loss_name,
+                class_weights=class_weights,
+                min_event_precision=config.experiment.min_event_precision,
             )
     
     print("total number of parameters: ", sum(p.numel() for p in model.parameters()))   
@@ -380,21 +474,33 @@ def train(config: Config, trainer: L.Trainer, run=None):
             print("no checkpoints has been saved, selecting the last model")
             best_model = model
         best_model.experiment_type = "EVALUATION"
+        primary_test_output = None
         for i in range(len(test_loaders)):
             test_dataloader = test_loaders[i]
             output = trainer.test(best_model, test_dataloader)
+            if i == 0 and output:
+                primary_test_output = output[0]
             if run is not None and dataset_type == "LOBSTER":
                 run.log({f"f1 {testing_stocks[i]} best": output[0]["f1_score"]}, commit=False)
             elif run is not None and dataset_type == "FI_2010":
                 run.log({f"f1 FI_2010 ": output[0]["f1_score"]}, commit=False)
+        if primary_test_output is not None:
+            summary_path = save_metrics_summary(config, config.model.type.value, model, primary_test_output)
+            print("Saved metrics summary: ", summary_path)
     else:
+        primary_test_output = None
         for i in range(len(test_loaders)):
             test_dataloader = test_loaders[i]
             output = trainer.test(model, test_dataloader)
+            if i == 0 and output:
+                primary_test_output = output[0]
             if run is not None and dataset_type == "LOBSTER":
                 run.log({f"f1 {testing_stocks[i]} best": output[0]["f1_score"]}, commit=False)
             elif run is not None and dataset_type == "FI_2010":
                 run.log({f"f1 FI_2010 ": output[0]["f1_score"]}, commit=False)
+        if primary_test_output is not None:
+            summary_path = save_metrics_summary(config, config.model.type.value, model, primary_test_output)
+            print("Saved metrics summary: ", summary_path)
             
     
 
@@ -444,15 +550,7 @@ def run_wandb(config: Config, accelerator):
                 wandb_instance_name += str(param) + "_" + str(model_params[param]) + "_"
 
         run.name = wandb_instance_name
-        seq_size = config.model.hyperparameters_fixed["seq_size"]
-        horizon = config.experiment.horizon
-        dataset = config.dataset.type.value
-        seed = config.experiment.seed
-        if dataset == "LOBSTER":
-            training_stocks = config.dataset.training_stocks
-            config.experiment.dir_ckpt = f"{dataset}_{training_stocks}_seq_size_{seq_size}_horizon_{horizon}_seed_{seed}"
-        else:
-            config.experiment.dir_ckpt = f"{dataset}_seq_size_{seq_size}_horizon_{horizon}_seed_{seed}"
+        resolve_ckpt_dir(config)
         wandb_instance_name = config.experiment.dir_ckpt
             
         trainer = L.Trainer(
@@ -537,6 +635,10 @@ def print_setup(config: Config):
     print("Is sweep: ", config.experiment.is_sweep)
     print(config.experiment.type)
     print("Is debug: ", config.experiment.is_debug) 
+    print("Loss: ", config.experiment.loss_name)
+    print("Min event precision: ", config.experiment.min_event_precision)
+    print("Use weighted sampler: ", config.dataset.use_weighted_sampler)
+    print("Weighted sampler pow: ", config.dataset.weighted_sampler_pow)
     if config.dataset.type == cst.DatasetType.LOBSTER:
         print("Training stocks: ", config.dataset.training_stocks)
         print("Testing stocks: ", config.dataset.testing_stocks)

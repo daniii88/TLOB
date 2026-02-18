@@ -40,6 +40,8 @@ data/ENGINE/
 data/ENGINE_USABLE/
 data/FI_2010/*.txt
 data/FI_2010/*.zip
+data/
+*.npy
 
 # Legacy preprocessing outputs
 preprocessing/digital*/

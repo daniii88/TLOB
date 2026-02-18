@@ -1,0 +1,30 @@
+{
+  "name": "engine_tlob_h100_recall",
+  "description": "ENGINE/TLOB recall-oriented baseline profile for h100.",
+  "train": {
+    "model": "tlob",
+    "dataset": "engine",
+    "overrides": {
+      "experiment.is_data_preprocessed": true,
+      "experiment.is_wandb": false,
+      "experiment.is_sweep": false,
+      "experiment.max_epochs": 5,
+      "experiment.seed": 42,
+      "experiment.horizon": 100,
+      "experiment.loss_name": "weighted_ce",
+      "experiment.min_event_precision": 0.2,
+      "dataset.batch_size": 128,
+      "dataset.use_weighted_sampler": false,
+      "dataset.weighted_sampler_pow": 1.0,
+      "model.hyperparameters_fixed.seq_size": 128,
+      "model.hyperparameters_fixed.lr": 0.0001,
+      "model.hyperparameters_fixed.num_layers": 4,
+      "model.hyperparameters_fixed.num_heads": 1,
+      "model.hyperparameters_fixed.all_features": true
+    }
+  },
+  "backtest": {
+    "script": "run_backtesting.py",
+    "args": []
+  }
+}

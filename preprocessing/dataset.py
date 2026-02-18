@@ -1,25 +1,25 @@
+from typing import Optional
+
 import torch
 from torch.utils import data
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 import numpy as np
 import constants as cst
-import time
-from torch.utils import data
-from utils.utils_data import one_hot_encoding_type, tanh_encoding_type
 
 class Dataset(data.Dataset):
     """Characterizes a dataset for PyTorch"""
     def __init__(self, x, y, seq_size):
         """Initialization""" 
         self.seq_size = seq_size
-        self.length = y.shape[0]
         self.x = x
         self.y = y
         if type(self.x) == np.ndarray:
             self.x = torch.from_numpy(x).float()
         if type(self.y) == np.ndarray:
             self.y = torch.from_numpy(y).long()
+        max_windows = max(int(self.x.shape[0]) - int(self.seq_size) + 1, 0)
+        self.length = min(int(self.y.shape[0]), max_windows)
         self.data = self.x
 
     def __len__(self):
@@ -40,7 +40,17 @@ def safe_collate(batch):
 
 
 class DataModule(pl.LightningDataModule):
-    def   __init__(self, train_set, val_set, batch_size, test_batch_size,  is_shuffle_train=True, test_set=None, num_workers=16):
+    def __init__(
+        self,
+        train_set,
+        val_set,
+        batch_size,
+        test_batch_size,
+        is_shuffle_train=True,
+        test_set=None,
+        num_workers=16,
+        train_sampler: Optional[Sampler] = None,
+    ):
         super().__init__()
 
         self.train_set = train_set
@@ -49,6 +59,7 @@ class DataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.test_batch_size = test_batch_size
         self.is_shuffle_train = is_shuffle_train
+        self.train_sampler = train_sampler
         if train_set.data.device.type != cst.DEVICE:       #this is true only when we are using a GPU but the data is still on the CPU
             self.pin_memory = True
         else:
@@ -56,10 +67,12 @@ class DataModule(pl.LightningDataModule):
         self.num_workers = num_workers
 
     def train_dataloader(self):
+        use_shuffle = self.is_shuffle_train and self.train_sampler is None
         return DataLoader(
             dataset=self.train_set,
             batch_size=self.batch_size,
-            shuffle=self.is_shuffle_train,
+            shuffle=use_shuffle,
+            sampler=self.train_sampler,
             pin_memory=self.pin_memory,
             drop_last=False,
             num_workers=self.num_workers,
